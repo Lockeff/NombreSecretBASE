@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Secure Guess Game ⚡</title>
+  <script src="https://cdn.jsdelivr.net/npm/ethers@6.13.4/dist/ethers.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg: #0d001f;
+      --accent: #a855f7;
+      --accent-light: #c084fc;
+      --text: #e6e6ff;
+      --surface: #1a0033;
+      --error: #ff5470;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Poppins", sans-serif;
+      background: radial-gradient(circle at 30% 30%, #240046, var(--bg));
+      color: var(--text);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      height: 100vh;
+      margin: 0;
+      padding: 2em;
+      overflow: hidden;
+    }
+
+    h1 {
+      font-size: 2em;
+      margin-bottom: 0.2em;
+      color: var(--accent-light);
+      text-shadow: 0 0 20px var(--accent);
+    }
+
+    p {
+      opacity: 0.8;
+      font-size: 1em;
+      margin-bottom: 2em;
+    }
+
+    .card {
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      border-radius: 16px;
+      padding: 2em;
+      box-shadow: 0 0 40px rgba(168, 85, 247, 0.2);
+      width: 340px;
+      text-align: center;
+      backdrop-filter: blur(20px);
+    }
+
+    button {
+      font-family: inherit;
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0.6em 1.4em;
+      margin: 0.5em 0;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 1em;
+      width: 100%;
+      transition: 0.25s ease;
+      box-shadow: 0 0 10px var(--accent);
+    }
+    button:hover {
+      background: var(--accent-light);
+      box-shadow: 0 0 25px var(--accent-light);
+      transform: translateY(-2px);
+    }
+
+    input[type=number] {
+      background: var(--surface);
+      border: 1px solid rgba(255, 255, 255, 0.1);
+      color: var(--text);
+      border-radius: 8px;
+      width: 100%;
+      padding: 0.6em;
+      text-align: center;
+      margin: 0.6em 0;
+      font-size: 1.1em;
+      outline: none;
+    }
+    input[type=number]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 10px var(--accent);
+    }
+
+    #log {
+      margin-top: 1em;
+      font-weight: 600;
+      min-height: 1.8em;
+      font-size: 1.1em;
+      color: var(--accent-light);
+      text-shadow: 0 0 10px rgba(168, 85, 247, 0.5);
+    }
+
+    #spinnerOverlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(13, 0, 31, 0.75);
+      align-items: center;
+      justify-content: center;
+      z-index: 9999;
+    }
+
+    #spinnerOverlay div {
+      width: 80px;
+      height: 80px;
+      border: 6px solid rgba(255, 255, 255, 0.1);
+      border-top-color: var(--accent-light);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      box-shadow: 0 0 25px var(--accent-light);
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    footer {
+      margin-top: 3em;
+      opacity: 0.5;
+      font-size: 0.8em;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="card">
+    <h1>Secure Guess Game ⚡</h1>
+    <p>Devine le nombre secret entre 1 et 10.<br>Tu as trois essais. Bonne chance.</p>
+
+    <button id="connect">🔗 Connecter ton wallet</button>
+    <button id="start">🎮 Démarrer la partie</button>
+    <input type="number" id="guess" min="1" max="10" placeholder="1-10" />
+    <button id="play">💥 Tenter</button>
+
+    <div id="log">Connecte ton wallet pour commencer.</div>
+  </div>
+
+  <div id="spinnerOverlay"><div></div></div>
+  <footer>propulsé par Base Sepolia — Graines de Pixels</footer>
+
+<script>
+const CONTRACT_ADDRESS = "0x113636d67e30a0C5F379C1cFF026Dc4784b24685";
+
+const ABI = [
+  "function startGame() external",
+  "function guess(uint8 guessNumber) external",
+  "event GuessResult(address indexed player, uint8 guess, string result)",
+  "event GameOver(address indexed player, bool won, uint8 revealedSecret)"
+];
+
+let provider, signer, contract;
+const logBox = document.getElementById('log');
+
+function log(msg) {
+  logBox.innerText = msg;
+}
+
+function showSpinner(msg = "Chargement...") {
+  document.getElementById('spinnerOverlay').style.display = 'flex';
+  log(msg);
+}
+function hideSpinner() {
+  document.getElementById('spinnerOverlay').style.display = 'none';
+}
+
+async function safeSend(txPromise, description = "") {
+  try {
+    showSpinner(description || "Envoi transaction...");
+    const tx = await txPromise;
+    showSpinner("⏳ Attente de confirmation...");
+    const receipt = await tx.wait();
+    hideSpinner();
+    return receipt;
+  } catch (err) {
+    hideSpinner();
+    const reason = err?.reason || err?.error?.message || err?.message || "Erreur inconnue";
+    log("⚠️ " + reason);
+    console.error(err);
+    throw err;
+  }
+}
+
+document.getElementById('connect').onclick = async () => {
+  try {
+    provider = new ethers.BrowserProvider(window.ethereum);
+    signer = await provider.getSigner();
+    contract = new ethers.Contract(CONTRACT_ADDRESS, ABI, signer);
+    const addr = await signer.getAddress();
+    log("✅ Connecté : " + addr.slice(0,6) + "..." + addr.slice(-4));
+  } catch {
+    log("❌ Connexion refusée");
+  }
+};
+
+document.getElementById('start').onclick = async () => {
+  if (!contract) return alert("Connecte ton wallet d'abord !");
+  try {
+    await safeSend(contract.startGame(), "Initialisation de la partie...");
+    log("🎲 Partie lancée ! À toi de jouer.");
+  } catch {}
+};
+
+document.getElementById('play').onclick = async () => {
+  if (!contract) return alert("Connecte ton wallet et démarre une partie !");
+  const val = Number(document.getElementById('guess').value);
+  if (!val || val < 1 || val > 10) return alert("Choisis un nombre entre 1 et 10 !");
+  try {
+    const receipt = await safeSend(contract.guess(val), "Soumission du nombre...");
+    for (const logEntry of receipt.logs) {
+      try {
+        const evt = contract.interface.parseLog(logEntry);
+        if (evt.name === "GuessResult") {
+          log(evt.args.result);
+        } else if (evt.name === "GameOver") {
+          log(evt.args.won
+            ? `🏆 GAGNÉ ! Le nombre était ${evt.args.revealedSecret}.`
+            : `💀 PERDU ! Le nombre était ${evt.args.revealedSecret}.`
+          );
+        }
+      } catch {}
+    }
+  } catch {}
+};
+</script>
+</body>
+</html>
